@@ -18,12 +18,25 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "dma.h"
 #include "i2c.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "util.h"
+#include "imu.h"
+#include "cli.h"
+#include "cli_impl.h"
+
+#include "stm32f1xx.h"
+#include <stdint.h>
+
+#include <math.h>
+#include <sys/unistd.h>
+#include <errno.h>
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -45,7 +58,9 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+// DMA buffer for UART RX 
+uint8_t dma_buffer[DMA_BUFFER_SIZE];
+volatile uint16_t offset = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,20 +103,77 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+
+  // Start DMA for UART RX
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart2, dma_buffer, DMA_BUFFER_SIZE);
+  __HAL_DMA_DISABLE_IT(&hdma_usart2_rx, DMA_IT_HT);
+
+  // Initialize imu
+  imu_t imu;
+  if(imu_init(&imu) != 0)
+  {
+    return 1;
+  }
+
+  print("Initialized!\r\n");
+
+  // Initialize CLI (user implementation with all commands and variables)
+  cli_user_init(dma_buffer, DMA_BUFFER_SIZE, (volatile uint32_t*)&hdma_usart2_rx.Instance->CNDTR);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint32_t last_time = HAL_GetTick();
   while (1)
   {
+    // Update CLI (must be called frequently to detect key presses)
+    cli_update();
+    
+    // Control LED based on CLI variable
+    if(led_enabled)
+    {
+      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+    }
+    else
+    {
+      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+    }
+    
+    // Check if enough time has passed for next sample
+    if(HAL_GetTick() - last_time < 10)
+    {
+      continue;
+    }
+    // Update last_time
+    last_time += 10;
+
+    // Process imu data
+    if(imu_process(&imu) != 0)
+    {
+      return 1;
+    }
+
+    // If logging is enabled, continuously print IMU data
+    // Press Enter to stop logging and return to CLI
+    if(cli_logging_enabled)
+    {
+      // Send imu data to console as formatted string
+      // Format: <ax> <ay> <az> <gx> <gy> <gz>
+      printf("%f %f %f %f %f %f\r\n", 
+             imu.acc[0], imu.acc[1], imu.acc[2], 
+             imu.gyr[0], imu.gyr[1], imu.gyr[2]);
+    }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
+  return 0;
   /* USER CODE END 3 */
 }
 
@@ -146,6 +218,47 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+void process_character(char ch)
+{
+
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+	if (huart->Instance == USART2)
+	{
+		offset = DMA_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(&hdma_usart2_rx);
+	}
+}
+
+int _write(int fd, char* ptr, int len) {
+  HAL_StatusTypeDef hstatus;
+
+  if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+    hstatus = HAL_UART_Transmit(&huart2, (uint8_t *) ptr, len, HAL_MAX_DELAY);
+    if (hstatus == HAL_OK)
+      return len;
+    else
+      return EIO;
+  }
+  errno = EBADF;
+  return -1;
+}
+
+int _read(int fd, char* ptr, int len) {
+  (void)len;
+  HAL_StatusTypeDef hstatus;
+
+  if (fd == STDIN_FILENO) {
+    hstatus = HAL_UART_Receive(&huart2, (uint8_t *) ptr, 1, HAL_MAX_DELAY);
+    if (hstatus == HAL_OK)
+      return 1;
+    else
+      return EIO;
+  }
+  errno = EBADF;
+  return -1;
+}
 /* USER CODE END 4 */
 
 /**
