@@ -26,14 +26,11 @@
 // Exported Variables
 // =============================================================================
 
-// LED control state - set this variable to control LED
-// When true, LED is on; when false, LED is off
-extern bool led_enabled;
 
-// Logging control state - set this variable to enable continuous data logging
-// When true, data logging is active; when false, logging is disabled
-// Any keypress automatically disables logging
-extern bool cli_logging_enabled;
+extern int led_mode;
+extern float led_blink_rate;
+
+extern bool imu_logging_enabled;
 
 // =============================================================================
 // User Initialization Function

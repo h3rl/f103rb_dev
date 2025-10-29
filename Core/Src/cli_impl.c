@@ -51,8 +51,6 @@ typedef struct {
     const char *description;
     var_type_t type;
     void *ptr;
-    int min_val;  // For int types (range validation)
-    int max_val;  // For int types
 } cli_var_t;
 
 // =============================================================================
@@ -60,44 +58,24 @@ typedef struct {
 // =============================================================================
 
 // Example variables - feel free to add your own!
-static bool debug_enabled = false;
-static bool verbose_mode = false;
-static bool test_mode = false;
-static bool imu_calibrate = false;
+//static bool debug_enabled = false;
+//static bool verbose_mode = false;
+//static bool test_mode = false;
+//static bool imu_calibrate = false;
 
 // Exported variables (accessible from other files)
-bool led_enabled = true;           // LED control state
-bool cli_logging_enabled = false;  // Logging state
-
-static int32_t sample_rate = 100;
-static int32_t log_level = 2;
-static int32_t filter_order = 3;
-static int32_t buffer_size = 256;
-
-static float temperature = 25.5f;
-static float voltage = 3.3f;
-static float threshold = 0.5f;
+int led_mode = 1;           // LED control state
+float led_blink_rate = 1.0f; // LED blink rate in Hz
+bool imu_logging_enabled = false;  // IMU logging state
 
 // Variable registry - add new variables here!
 static cli_var_t cli_vars[] = {
-    // Boolean variables
-    {"debug",      "Enable debug output",              VAR_BOOL,  &debug_enabled,      0, 0},
-    {"verbose",    "Enable verbose logging",           VAR_BOOL,  &verbose_mode,       0, 0},
-    {"test",       "Enable test mode",                 VAR_BOOL,  &test_mode,          0, 0},
-    {"led",        "Control LED state",                VAR_BOOL,  &led_enabled,        0, 0},
-    {"imu_cal",    "Trigger IMU calibration",          VAR_BOOL,  &imu_calibrate,      0, 0},
-    {"log",        "Enable continuous data logging",   VAR_BOOL,  &cli_logging_enabled, 0, 0},
-    
-    // Integer variables
-    {"rate",       "Sample rate in Hz",                VAR_INT,   &sample_rate,    1, 1000},
-    {"loglevel",   "Log level (0=none, 3=all)",        VAR_INT,   &log_level,      0, 3},
-    {"filter",     "Filter order",                     VAR_INT,   &filter_order,   1, 10},
-    {"bufsize",    "Buffer size",                      VAR_INT,   &buffer_size,    64, 1024},
-    
-    // Float variables
-    {"temp",       "Temperature in Celsius",           VAR_FLOAT, &temperature,    0, 0},
-    {"vdd",        "Supply voltage",                   VAR_FLOAT, &voltage,        0, 0},
-    {"thresh",     "Detection threshold",              VAR_FLOAT, &threshold,      0, 0},
+    // Led settings
+    {"ledmode",   "LED mode (0=off,1=on,2=blink)",     VAR_INT,   &led_mode},
+    {"ledrate",  "LED blink rate in Hz",               VAR_FLOAT, &led_blink_rate},
+
+    // imu logging to console
+    {"imulog",        "Enable imu logging to console",   VAR_BOOL,  &imu_logging_enabled},
 };
 
 #define NUM_VARS (sizeof(cli_vars) / sizeof(cli_vars[0]))
@@ -214,30 +192,18 @@ void cli_cmd_help(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
-    
-    cli_puts("=== CLI Help ===\r\n");
+
+    cli_puts("=== Help ===\r\n");
     cli_puts("Commands:\r\n");
     cli_puts("  help              - Show this help message\r\n");
-    cli_puts("  list / vars       - List all variables with descriptions\r\n");
+    cli_puts("  status            - Show system status summary\r\n");
+    cli_puts("  list              - List all variables with descriptions\r\n");
     cli_puts("  get <var>         - Get variable value\r\n");
     cli_puts("  set <var> <val>   - Set variable value\r\n");
-    cli_puts("  status            - Show system status summary\r\n");
-    cli_puts("  reset             - Reset all variables to defaults\r\n");
-    cli_puts("  info              - Show firmware information\r\n");
     cli_puts("\r\nNavigation:\r\n");
     cli_puts("  Up/Down arrows    - Navigate command history\r\n");
     cli_puts("  Tab               - Auto-complete commands\r\n");
     cli_puts("  Backspace         - Delete character\r\n");
-    cli_puts("\r\nData Logging:\r\n");
-    cli_puts("  set log true      - Enable continuous data logging\r\n");
-    cli_puts("  Press Enter       - Stop logging and return to CLI\r\n");
-    cli_puts("\r\nExamples:\r\n");
-    cli_puts("  > list            - Show all variables\r\n");
-    cli_puts("  > get debug       - Get debug variable\r\n");
-    cli_puts("  > set debug true  - Enable debug mode\r\n");
-    cli_puts("  > set rate 200    - Set sample rate to 200 Hz\r\n");
-    cli_puts("  > set log true    - Start logging IMU/sensor data\r\n");
-    cli_puts("  > status          - Show system status\r\n");
 }
 
 void cli_cmd_info(int argc, char *argv[])
@@ -248,12 +214,28 @@ void cli_cmd_info(int argc, char *argv[])
     cli_puts("=== System Information ===\r\n");
     cli_puts("Firmware:     STM32F103 CLI Debug System\r\n");
     cli_puts("Version:      2.0.0 (Modular)\r\n");
-    cli_puts("Build Date:   " __DATE__ " " __TIME__ "\r\n");
     char buffer[16];
     cli_puts("Variables:    ");
     snprintf(buffer, sizeof(buffer), "%d\r\n", (int)NUM_VARS);
     cli_puts(buffer);
     cli_puts("Commands:     help, list, get, set, status, reset, info\r\n");
+}
+
+void cli_cmd_status(int argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+    char buffer[32];
+    
+    cli_puts("Firmware build date: " __DATE__ " " __TIME__ "\r\n");
+    cli_puts("=== System Status ===\r\n");
+    cli_puts("\r\nLED State:    ");
+    cli_puts(led_mode == 0 ? "OFF" : (led_mode == 1 ? "ON" : "BLINKING"));
+    cli_puts("\r\nLED Blink Rate: ");
+    snprintf(buffer, sizeof(buffer), "%.1f Hz\r\n", led_blink_rate);
+    cli_puts(buffer);
+    cli_puts("\r\nIMU Logging:      ");
+    cli_puts(imu_logging_enabled ? "ACTIVE" : "STOPPED");
 }
 
 void cli_cmd_list(int argc, char *argv[])
@@ -343,8 +325,6 @@ void cli_cmd_set(int argc, char *argv[])
                 case VAR_INT:
                 {
                     int32_t intval = atoi(argv[2]);
-                    if (intval < cli_vars[i].min_val) intval = cli_vars[i].min_val;
-                    if (intval > cli_vars[i].max_val) intval = cli_vars[i].max_val;
                     *(int32_t*)cli_vars[i].ptr = intval;
                     break;
                 }
@@ -371,67 +351,102 @@ void cli_cmd_set(int argc, char *argv[])
     cli_puts("\r\n");
 }
 
-void cli_cmd_status(int argc, char *argv[])
+void cli_cmd_cfg(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
-    
-    cli_puts("=== System Status ===\r\n");
-    cli_puts("Debug Mode:   ");
-    cli_puts(debug_enabled ? "ENABLED" : "DISABLED");
-    cli_puts("\r\nVerbose Mode: ");
-    cli_puts(verbose_mode ? "ENABLED" : "DISABLED");
-    cli_puts("\r\nTest Mode:    ");
-    cli_puts(test_mode ? "ENABLED" : "DISABLED");
-    cli_puts("\r\nLED State:    ");
-    cli_puts(led_enabled ? "ON" : "OFF");
-    cli_puts("\r\nLogging:      ");
-    cli_puts(cli_logging_enabled ? "ACTIVE" : "STOPPED");
-    
-    char buffer[32];
-    cli_puts("\r\n\r\nSample Rate:  ");
-    snprintf(buffer, sizeof(buffer), "%d Hz\r\n", (int)sample_rate);
-    cli_puts(buffer);
-    
-    cli_puts("Log Level:    ");
-    snprintf(buffer, sizeof(buffer), "%d\r\n", (int)log_level);
-    cli_puts(buffer);
-    
-    cli_puts("Temperature:  ");
-    snprintf(buffer, sizeof(buffer), "%.1f C\r\n", temperature);
-    cli_puts(buffer);
-    
-    cli_puts("Voltage:      ");
-    snprintf(buffer, sizeof(buffer), "%.2f V\r\n", voltage);
-    cli_puts(buffer);
+
+    if (argc != 3)
+    {
+        cli_puts("Usage: cfg <load|save> [filename]\r\n");
+        return;
+    }
+
+    switch (argv[1][0]) {
+        case 'l': // load
+            //cfg_load(argv[2]);
+            cli_puts("Configuration loaded from ");
+            cli_puts(argv[2]);
+            cli_puts(" (not really, placeholder)\r\n");
+            break;
+        case 's': // save
+            //cfg_save(argv[2]);
+            // TODO: Implement actual save/load functionality
+            // check for overwrite, file existence, etc.
+            cli_puts("Configuration saved to ");
+            cli_puts(argv[2]);
+            cli_puts(" (not really, placeholder)\r\n");
+            break;
+        default:
+            cli_puts("Unknown subcommand for 'cfg': ");
+            cli_puts(argv[1]);
+            cli_puts("\r\n");
+            return;
+    }
 }
 
-void cli_cmd_reset(int argc, char *argv[])
+void cli_cmd_calibrate(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
-    
-    debug_enabled = false;
-    verbose_mode = false;
-    test_mode = false;
-    led_enabled = true;
-    imu_calibrate = false;
-    cli_logging_enabled = false;
-    sample_rate = 100;
-    log_level = 2;
-    filter_order = 3;
-    buffer_size = 256;
-    temperature = 25.5f;
-    voltage = 3.3f;
-    threshold = 0.5f;
-    
-    cli_puts("All variables reset to defaults\r\n");
+
+    if (argc < 2)
+    {
+        cli_puts("Usage: calibrate <gyro|mag|accel>\r\n");
+        return;
+    }
+
+    switch (argv[1][0]) {
+        case 'g': // gyro
+            cli_puts("Calibrating gyro... (Not really, this is a placeholder)\r\n");
+            break;
+        case 'm': // mag
+            cli_puts("Calibrating magnetometer... (Not really, this is a placeholder)\r\n");
+            break;
+        case 'a': // accel
+            cli_puts("Calibrating accelerometer... (Not really, this is a placeholder)\r\n");
+            break;
+        default:
+            cli_puts("Unknown sensor type: ");
+            cli_puts(argv[1]);
+            cli_puts("\r\n");
+            return;
+    }
 }
 
-void cli_cmd_vars(int argc, char *argv[])
+void cli_cmd_filedump(int argc, char *argv[])
 {
-    // Alias for 'list' command
-    cli_cmd_list(argc, argv);
+    (void)argc;
+    (void)argv;
+
+    if (argc != 2)
+    {
+        cli_puts("Usage: filedump <filename>\r\n");
+        return;
+    }
+
+    // Placeholder for file dump functionality
+    cli_puts("Dumping file: ");
+    // dump line by line directly to UART
+    cli_puts(argv[1]);
+    cli_puts(" (Not really, this is a placeholder)\r\n");
+}
+
+void cli_cmd_flashdump(int argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+
+    if (argc != 2)
+    {
+        cli_puts("Usage: flashdump <address>\r\n");
+        return;
+    }
+
+    // Placeholder for flash dump functionality
+    cli_puts("Dumping flash memory at address: ");
+    cli_puts(argv[1]);
+    cli_puts(" (Not really, this is a placeholder)\r\n");
 }
 
 // =============================================================================
@@ -440,13 +455,17 @@ void cli_cmd_vars(int argc, char *argv[])
 
 static const cli_command_t app_commands[] = {
     {"help",   cli_cmd_help},
-    {"info",   cli_cmd_info},
+    {"status", cli_cmd_status},
+
     {"list",   cli_cmd_list},
-    {"vars",   cli_cmd_vars},
     {"get",    cli_cmd_get},
     {"set",    cli_cmd_set},
-    {"status", cli_cmd_status},
-    {"reset",  cli_cmd_reset},
+
+    {"cfg",   cli_cmd_cfg},
+
+    {"calibrate", cli_cmd_calibrate},
+    {"filedump", cli_cmd_filedump},
+    {"flashdump", cli_cmd_flashdump},
 };
 
 #define NUM_COMMANDS (sizeof(app_commands) / sizeof(app_commands[0]))

@@ -29,6 +29,7 @@
 #include "imu.h"
 #include "cli.h"
 #include "cli_impl.h"
+#include "timer_module.h"
 
 #include "stm32f1xx.h"
 #include <stdint.h>
@@ -108,6 +109,8 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
+  timer_module_init();
+
   // Start DMA for UART RX
   HAL_UARTEx_ReceiveToIdle_DMA(&huart2, dma_buffer, DMA_BUFFER_SIZE);
   __HAL_DMA_DISABLE_IT(&hdma_usart2_rx, DMA_IT_HT);
@@ -133,17 +136,26 @@ int main(void)
   {
     // Update CLI (must be called frequently to detect key presses)
     cli_update();
-    
-    // Control LED based on CLI variable
-    if(led_enabled)
-    {
-      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
-    }
-    else
+
+
+    if(led_mode == 0)
     {
       HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
     }
-    
+    else if(led_mode == 1)
+    {
+        HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+    }
+    else if(led_mode == 2)
+    {
+    	static uint64_t blink_timer = 0;
+    	uint64_t interval_ms = led_blink_rate * 1000;
+    	if(has_interval_elapsed_ms(&blink_timer, interval_ms))
+    	{
+    		HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+    	}
+    }
+
     // Check if enough time has passed for next sample
     if(HAL_GetTick() - last_time < 10)
     {
@@ -160,7 +172,7 @@ int main(void)
 
     // If logging is enabled, continuously print IMU data
     // Press Enter to stop logging and return to CLI
-    if(cli_logging_enabled)
+    if(imu_logging_enabled)
     {
       // Send imu data to console as formatted string
       // Format: <ax> <ay> <az> <gx> <gy> <gz>
