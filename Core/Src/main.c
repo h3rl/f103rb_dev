@@ -123,7 +123,7 @@ int main(void)
     return 1;
   }
 
-  const float kalman_dt = 1.0/100.0; // 100hz
+  const float kalman_dt = 1.0/500.0; // 500hz
 
   kalman_init(kalman_dt);
 
@@ -172,8 +172,32 @@ int main(void)
 //	        printf("%lu %f %f %f %f %f %f\r\n", t,
 //	               imu.acc[0], imu.acc[1], imu.acc[2],
 //	               imu.gyr[0], imu.gyr[1], imu.gyr[2]);
-	    	printf("%.5f\r\n", kalman_get_angle()*180.0f/3.14f);
+
+
 	    }
+	}
+
+    static uint64_t tim_send = 0;
+	if(has_interval_elapsed_ms(&tim_send, 1000.0/60.0))
+	{
+    	float pitch = kalman_get_pitch();
+    	float roll  = kalman_get_roll();
+    	float bpitch = kalman_get_pitch_bias();
+    	float broll  = kalman_get_roll_bias();
+
+//    	printf("%.5f %.5f\r\n", pitch*180.0f/M_PI, roll*180.0f/M_PI);
+		uint8_t buffer[sizeof(float)*4+1];
+
+		// copy each float into the buffer
+		uint8_t header =0xAA;
+		memcpy(buffer, &header , sizeof(uint8_t));
+		memcpy(buffer+1,       &pitch,  sizeof(float));
+		memcpy(buffer+5,     &roll,   sizeof(float));
+		memcpy(buffer+9,     &bpitch, sizeof(float));
+		memcpy(buffer+13,    &broll,  sizeof(float));
+
+		// send raw data via UART
+		HAL_UART_Transmit(&huart2, buffer, sizeof(buffer), HAL_MAX_DELAY);
 	}
 
 

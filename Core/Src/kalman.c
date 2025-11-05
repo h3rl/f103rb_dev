@@ -1,171 +1,120 @@
-/*
- * kalman.c
- *
- *  Created on: Oct 29, 2025
- *      Author: halva
- */
-
 #include "kalman.h"
-#include "arm_math.h"
 #include <math.h>
 #include <stdbool.h>
 
-typedef arm_matrix_instance_f64 mat_t; // kept for compatibility
-
-#define NX 2   // states: [angle, bias]
-#define NU 1   // inputs: gyro rate
-#define NY 1   // measurement: accel pitch
-
-/* persistent state */
 static bool kalman_ready = false;
+static float dt;
 
-/* storage */
-static float32_t A_data[NX*NX];
-static float32_t B_data[NX*NU];
-static float32_t C_data[NY*NX];
-static float32_t Q_data[NX*NX];
-static float32_t R_data[NY*NY];
-static float32_t xhat_data[NX*1];
-static float32_t P_data[NX*NX];
+/* State */
+static float x[4];       // [pitch, pitch_bias, roll, roll_bias]
+static float P[4][4];    // covariance
 
-/* matrix instances */
-static arm_matrix_instance_f32 A, B, C, Q, R, xhat, P;
+/* Process and measurement noise */
+static const float q_angle = 5e-3f;  // faster angle response (increase for faster angle response but it will cost noise!)
+static const float q_bias  = 1e-6f;  // allow bias to adapt slowly
+static const float r_meas  = 5e-3f;  // accelerometer trusted moderately
 
-/* temporaries */
-static float32_t tmp1_data[NX*NX];
-static float32_t tmp2_data[NX*NX];
-static float32_t tmpv1_data[NX];
-static float32_t tmpv2_data[NX];
-static arm_matrix_instance_f32 tmp1, tmp2, tmpv1, tmpv2;
-
-void kalman_init(float dt)
+void kalman_init(float dt_)
 {
-    if (kalman_ready)
-        return;
-
-    /* init matrices */
-    arm_mat_init_f32(&A, NX, NX, A_data);
-    arm_mat_init_f32(&B, NX, NU, B_data);
-    arm_mat_init_f32(&C, NY, NX, C_data);
-    arm_mat_init_f32(&Q, NX, NX, Q_data);
-    arm_mat_init_f32(&R, NY, NY, R_data);
-    arm_mat_init_f32(&xhat, NX, 1, xhat_data);
-    arm_mat_init_f32(&P, NX, NX, P_data);
-    arm_mat_init_f32(&tmp1, NX, NX, tmp1_data);
-    arm_mat_init_f32(&tmp2, NX, NX, tmp2_data);
-    arm_mat_init_f32(&tmpv1, NX, 1, tmpv1_data);
-    arm_mat_init_f32(&tmpv2, NX, 1, tmpv2_data);
-
-    /* constants */
-    const float32_t q_angle = 1e-4f;
-    const float32_t q_bias  = 1e-6f;
-    const float32_t r_meas  = 1e-2f;
-
-    /* model:
-       angle_k+1 = angle_k + (gyro - bias)*dt
-       bias_k+1  = bias_k
-       y = angle
-    */
-    A_data[0] = 1.0f;  A_data[1] = -dt;
-    A_data[2] = 0.0f;  A_data[3] = 1.0f;
-
-    B_data[0] = dt;
-    B_data[1] = 0.0f;
-
-    C_data[0] = 1.0f;  C_data[1] = 0.0f;
-
-    Q_data[0] = q_angle; Q_data[1] = 0.0f;
-    Q_data[2] = 0.0f;    Q_data[3] = q_bias;
-
-    R_data[0] = r_meas;
-
-    xhat_data[0] = 0.0f;
-    xhat_data[1] = 0.0f;
-
-    P_data[0] = 1e-1f; P_data[1] = 0.0f;
-    P_data[2] = 0.0f;  P_data[3] = 1e-1f;
-
+    dt = dt_;
+    for(int i=0;i<4;i++) x[i]=0.0f;
+    for(int i=0;i<4;i++)
+        for(int j=0;j<4;j++)
+            P[i][j] = (i==j) ? 1e-1f : 0.0f;
     kalman_ready = true;
 }
 
 void kalman_update(imu_t* imu)
 {
-    if (!kalman_ready)
-    {
-    	assert("kalman not initialized" && 0);
-    }
+    if(!kalman_ready) return;
 
-    /* Convert gyro X (deg/s) -> rad/s */
-    const float32_t gyro_rate = imu->gyr[0] * (float32_t)M_PI / 180.0f;
+    // Convert gyro to rad/s
+    float gx = imu->gyr[0]*M_PI/180.0f;
+    float gy = imu->gyr[1]*M_PI/180.0f;
 
-    /* Pitch from accelerometer */
-    float32_t ax = imu->acc[0];
-    float32_t ay = imu->acc[1];
-    float32_t az = imu->acc[2];
-    float32_t denom = sqrtf(ay*ay + az*az);
-    if (denom < 1e-6f) denom = 1e-6f;
-    float32_t y_meas = atan2f(-ax, denom);
+    // Accelerometer pitch/roll (radians)
+    float pitch_acc = atan2f(-imu->acc[0], sqrtf(imu->acc[1]*imu->acc[1] + imu->acc[2]*imu->acc[2]));
+    float roll_acc  = atan2f(imu->acc[1], imu->acc[2]);
 
-    /* ---- Prediction ---- */
-    // x_pred = A*xhat + B*u
-    arm_mat_mult_f32(&A, &xhat, &tmpv1);       // tmpv1 = A*xhat
-    tmpv1_data[0] += B_data[0] * gyro_rate;    // add B*u
-    tmpv1_data[1] += B_data[1] * gyro_rate;
+    // --- Prediction ---
+    float x_pred[4];
+    x_pred[0] = x[0] + dt*(gx - x[1]);
+    x_pred[1] = x[1];
+    x_pred[2] = x[2] + dt*(gy - x[3]);
+    x_pred[3] = x[3];
 
-    // P_pred = A*P*A' + Q
-    arm_mat_mult_f32(&A, &P, &tmp1);
-    arm_mat_trans_f32(&A, &tmp2);
-    arm_mat_mult_f32(&tmp1, &tmp2, &tmp1);
-    arm_mat_add_f32(&tmp1, &Q, &tmp1);
+    // --- Covariance prediction ---
+    float P_pred[4][4];
+    // P00
+    P_pred[0][0] = P[0][0] + dt*(dt*P[1][1] - P[0][1] - P[1][0] + q_angle);
+    P_pred[0][1] = P[0][1] - dt*P[1][1];
+    P_pred[0][2] = P[0][2] - dt*P[1][3];
+    P_pred[0][3] = P[0][3] - dt*P[1][3]; // cross-axis small, optional
 
-    /* ---- Update ---- */
-    // S = C*P_pred*C' + R  (scalar here)
-    float32_t S;
-    float32_t CtPC;
-    CtPC = tmp1_data[0]*C_data[0]*C_data[0] +
-           tmp1_data[1]*C_data[0]*C_data[1] +
-           tmp1_data[2]*C_data[1]*C_data[0] +
-           tmp1_data[3]*C_data[1]*C_data[1];
-    S = CtPC + R_data[0];
-    float32_t invS = 1.0f / S;
+    P_pred[1][0] = P[1][0] - dt*P[1][1];
+    P_pred[1][1] = P[1][1] + q_bias*dt;
+    P_pred[1][2] = P[1][2];
+    P_pred[1][3] = P[1][3];
 
-    // K = P_pred*C'*inv(S)
-    float32_t K0 = (tmp1_data[0]*C_data[0] + tmp1_data[1]*C_data[1]) * invS;
-    float32_t K1 = (tmp1_data[2]*C_data[0] + tmp1_data[3]*C_data[1]) * invS;
+    P_pred[2][0] = P[2][0] - dt*P[3][0];
+    P_pred[2][1] = P[2][1];
+    P_pred[2][2] = P[2][2] + dt*(dt*P[3][3] - P[2][3] - P[3][2] + q_angle);
+    P_pred[2][3] = P[2][3] - dt*P[3][3];
 
-    // innovation = y - C*x_pred
-    float32_t y_pred = C_data[0]*tmpv1_data[0] + C_data[1]*tmpv1_data[1];
-    float32_t innov = y_meas - y_pred;
+    P_pred[3][0] = P[3][0];
+    P_pred[3][1] = P[3][1];
+    P_pred[3][2] = P[3][2] - dt*P[3][3];
+    P_pred[3][3] = P[3][3] + q_bias*dt;
 
-    // xhat = x_pred + K*innov
-    xhat_data[0] = tmpv1_data[0] + K0 * innov;
-    xhat_data[1] = tmpv1_data[1] + K1 * innov;
+    // --- Innovation ---
+    float y[2] = { pitch_acc - x_pred[0], roll_acc - x_pred[2] };
 
-    // P = (I - K*C)*P_pred
-    float32_t I_KC[4];
-    I_KC[0] = 1.0f - K0*C_data[0];
-    I_KC[1] = -K0*C_data[1];
-    I_KC[2] = -K1*C_data[0];
-    I_KC[3] = 1.0f - K1*C_data[1];
+    // --- Innovation covariance S (2x2) ---
+    float S[2][2];
+    S[0][0] = P_pred[0][0] + r_meas;
+    S[0][1] = P_pred[0][2];
+    S[1][0] = P_pred[2][0];
+    S[1][1] = P_pred[2][2] + r_meas;
 
-    tmp2_data[0] = I_KC[0]*tmp1_data[0] + I_KC[1]*tmp1_data[2];
-    tmp2_data[1] = I_KC[0]*tmp1_data[1] + I_KC[1]*tmp1_data[3];
-    tmp2_data[2] = I_KC[2]*tmp1_data[0] + I_KC[3]*tmp1_data[2];
-    tmp2_data[3] = I_KC[2]*tmp1_data[1] + I_KC[3]*tmp1_data[3];
+    // --- Invert S ---
+    float det = S[0][0]*S[1][1] - S[0][1]*S[1][0];
+    if(fabsf(det)<1e-12f) det = 1e-12f;
+    float S_inv[2][2];
+    S_inv[0][0] =  S[1][1]/det;
+    S_inv[0][1] = -S[0][1]/det;
+    S_inv[1][0] = -S[1][0]/det;
+    S_inv[1][1] =  S[0][0]/det;
 
-    P_data[0] = tmp2_data[0];
-    P_data[1] = tmp2_data[1];
-    P_data[2] = tmp2_data[2];
-    P_data[3] = tmp2_data[3];
+    // --- Kalman gain K = P_pred * C' * S^-1 ---
+    float K[4][2];
+    K[0][0] = P_pred[0][0]*S_inv[0][0] + P_pred[0][2]*S_inv[1][0];
+    K[0][1] = P_pred[0][0]*S_inv[0][1] + P_pred[0][2]*S_inv[1][1];
+    K[1][0] = P_pred[1][0]*S_inv[0][0] + P_pred[1][2]*S_inv[1][0];
+    K[1][1] = P_pred[1][0]*S_inv[0][1] + P_pred[1][2]*S_inv[1][1];
+    K[2][0] = P_pred[2][0]*S_inv[0][0] + P_pred[2][2]*S_inv[1][0];
+    K[2][1] = P_pred[2][0]*S_inv[0][1] + P_pred[2][2]*S_inv[1][1];
+    K[3][0] = P_pred[3][0]*S_inv[0][0] + P_pred[3][2]*S_inv[1][0];
+    K[3][1] = P_pred[3][0]*S_inv[0][1] + P_pred[3][2]*S_inv[1][1];
+
+    // --- State update ---
+    for(int i=0;i<4;i++)
+        x[i] = x_pred[i] + K[i][0]*y[0] + K[i][1]*y[1];
+
+    // --- Covariance update P = (I-K*C)*P_pred ---
+    float P_new[4][4];
+    for(int i=0;i<4;i++)
+        for(int j=0;j<4;j++)
+            P_new[i][j] = P_pred[i][j]
+                        - K[i][0]*P_pred[0][j]
+                        - K[i][1]*P_pred[2][j];
+
+    for(int i=0;i<4;i++)
+        for(int j=0;j<4;j++)
+            P[i][j] = P_new[i][j];
 }
 
-float kalman_get_angle(void)
-{
-    return xhat_data[0];   // estimated pitch angle [radians]
-}
-
-float kalman_get_bias(void)
-{
-    return xhat_data[1];   // estimated gyro bias [radians/s]
-}
-
+// --- Getters ---
+float kalman_get_pitch(void)       { return x[0]; }
+float kalman_get_pitch_bias(void)  { return x[1]; }
+float kalman_get_roll(void)        { return x[2]; }
+float kalman_get_roll_bias(void)   { return x[3]; }
