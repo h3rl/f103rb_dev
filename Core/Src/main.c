@@ -30,6 +30,7 @@
 #include "cli.h"
 #include "cli_impl.h"
 #include "timer_module.h"
+#include "kalman.h"
 
 #include "stm32f1xx.h"
 #include <stdint.h>
@@ -122,6 +123,10 @@ int main(void)
     return 1;
   }
 
+  const float kalman_dt = 1.0/100.0; // 100hz
+
+  kalman_init(kalman_dt);
+
   print("Initialized!\r\n");
 
   // Initialize CLI (user implementation with all commands and variables)
@@ -131,11 +136,10 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  uint32_t last_time = HAL_GetTick();
   while (1)
   {
     // Update CLI (must be called frequently to detect key presses)
-    cli_update();
+//    cli_update();
 
 
     if(led_mode == 0)
@@ -149,7 +153,7 @@ int main(void)
     else if(led_mode == 2)
     {
     	static uint64_t blink_timer = 0;
-    	uint64_t interval_ms = led_blink_rate * 1000;
+    	uint64_t interval_ms = 1000 / led_blink_rate;
     	if(has_interval_elapsed_ms(&blink_timer, interval_ms))
     	{
     		HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
@@ -157,18 +161,23 @@ int main(void)
     }
 
     // Check if enough time has passed for next sample
-    if(HAL_GetTick() - last_time < 10)
-    {
-      continue;
-    }
-    // Update last_time
-    last_time += 10;
+    static uint64_t tim_imu = 0;
+	if(has_interval_elapsed_ms(&tim_imu, kalman_dt)) // 100 hz
+	{
+	    // Process imu data
+	    if(imu_process(&imu) == 0)
+	    {
+	    	kalman_update(&imu);
+//	    	uint32_t t = micros() & 0xffffffff;
+//	        printf("%lu %f %f %f %f %f %f\r\n", t,
+//	               imu.acc[0], imu.acc[1], imu.acc[2],
+//	               imu.gyr[0], imu.gyr[1], imu.gyr[2]);
+	    	printf("%.5f\r\n", kalman_get_angle()*180.0f/3.14f);
+	    }
+	}
 
-    // Process imu data
-    if(imu_process(&imu) != 0)
-    {
-      return 1;
-    }
+
+
 
     // If logging is enabled, continuously print IMU data
     // Press Enter to stop logging and return to CLI

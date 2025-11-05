@@ -44,7 +44,8 @@ bool has_interval_elapsed_us(uint64_t *timer, uint64_t interval_us) {
 bool has_interval_elapsed_ms(uint64_t *timer, uint64_t interval_ms) {
     uint64_t currentTime = micros() / 1000; // Convert microseconds to milliseconds
     if ((currentTime - *timer) >= interval_ms) {
-        *timer = currentTime;
+//        *timer = currentTime;
+        *timer += interval_ms;
         return true; // Timer has elapsed
     }
     return false; // Timer has not elapsed
